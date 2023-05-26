@@ -1,6 +1,15 @@
 # snitchrs
 An eBPF-based program to keep track of the IPs to which your machine is connecting. Inspired by Little Snitch Mini.
 
+## todo:
+* connect: check if syn is there (e.g. connection start) record ip
+* disconnect: check if flag is there then it's a disconnect
+* 
+- Connect{ ip }
+- received { ip, buf_len }
+- sent { ip, buf_len }
+- closed { ip }
+
 ## Prerequisites
 
 1. Install a rust stable toolchain: `rustup install stable`

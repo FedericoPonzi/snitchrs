@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 aya-bpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
-snitchrs-common = { path = "../snitchrs-common" }
+snitchrs-common = { path = "../snitchrs-common", features = ["kernel"]}
 network-types = "0.0.4"
 memoffset = "0.9.0"
 
