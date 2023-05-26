@@ -14,7 +14,7 @@ use network_types::{
     tcp::TcpHdr,
     udp::UdpHdr,
 };
-use snitchrs_common::SnitchrsEvent;
+use snitchrs_common::{SnitchrsDirection, SnitchrsEvent};
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -26,7 +26,7 @@ static mut EVENT_QUEUE: PerfEventArray<SnitchrsEvent> = PerfEventArray::with_max
 
 #[classifier(name = "snitchrs_ingress")]
 pub fn snitchrs_ingress(ctx: TcContext) -> i32 {
-    match try_snitchrs(ctx, true) {
+    match try_snitchrs(ctx, SnitchrsDirection::Ingress) {
         Ok(ret) => ret,
         Err(_) => TC_ACT_SHOT,
     }
@@ -34,13 +34,13 @@ pub fn snitchrs_ingress(ctx: TcContext) -> i32 {
 
 #[classifier(name = "snitchrs")]
 pub fn snitchrs(ctx: TcContext) -> i32 {
-    match try_snitchrs(ctx, false) {
+    match try_snitchrs(ctx, SnitchrsDirection::Egress) {
         Ok(ret) => ret,
         Err(_) => TC_ACT_SHOT,
     }
 }
 
-fn try_snitchrs(ctx: TcContext, ingress: bool) -> Result<i32, ()> {
+fn try_snitchrs(ctx: TcContext, ingress: SnitchrsDirection) -> Result<i32, ()> {
     let ethhdr: EthHdr = ctx.load(0).map_err(|_| ())?;
     match ethhdr.ether_type {
         EtherType::Ipv4 => {}
@@ -73,6 +73,7 @@ fn try_snitchrs(ctx: TcContext, ingress: bool) -> Result<i32, ()> {
                 &ctx,
                 ingress,
                 is_initial_packet(&tcp_hdr),
+                is_fin_packet(&tcp_hdr),
                 source_ip,
                 u16::from_be(source_port),
                 destination_ip,
@@ -90,32 +91,30 @@ fn try_snitchrs(ctx: TcContext, ingress: bool) -> Result<i32, ()> {
 #[inline]
 fn get_event(
     ctx: &TcContext,
-    ingress: bool,
+    direction: SnitchrsDirection,
     is_initial_packet: bool,
+    is_fin_packet: bool,
     source_ip: u32,
     source_port: u16,
     destination_ip: u32,
     destination_port: u16,
     payload_size: u16,
 ) -> SnitchrsEvent {
-    if ingress {
-        SnitchrsEvent::new_ingress_traffic(source_ip, source_port, destination_port, payload_size)
+    /*info!(
+    ctx,
+    "DEST {:ipv4}, source {:ipv4}", destination_ip, source_ip
+    );*/
+    let (remote_ip, remote_port, local_port) = if direction == SnitchrsDirection::Ingress {
+        (source_ip, source_port, destination_port)
     } else {
-        if is_initial_packet {
-            /*info!(
-                ctx,
-                "DEST {:ipv4}, source {:ipv4}", destination_ip, source_ip
-            );*/
-
-            SnitchrsEvent::new_connect(destination_ip, destination_port, source_port)
-        } else {
-            SnitchrsEvent::new_egress_traffic(
-                destination_ip,
-                source_port,
-                destination_port,
-                payload_size,
-            )
-        }
+        (destination_ip, destination_port, source_port)
+    };
+    if is_initial_packet {
+        SnitchrsEvent::new_connect(remote_ip, remote_port, local_port, direction)
+    } else if is_fin_packet {
+        SnitchrsEvent::new_disconnect(remote_ip, remote_port, local_port, direction)
+    } else {
+        SnitchrsEvent::new_traffic(remote_ip, remote_port, local_port, payload_size, direction)
     }
 }
 
@@ -125,4 +124,10 @@ fn is_initial_packet(packet: &TcpHdr) -> bool {
     let ack_flag = packet.ack() == 1;
 
     syn_flag && !ack_flag
+}
+
+#[inline]
+fn is_fin_packet(packet: &TcpHdr) -> bool {
+    let fin_flag = packet.fin() == 1;
+    fin_flag
 }

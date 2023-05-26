@@ -5,84 +5,80 @@ use aya::Pod;
 
 use core::fmt;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(C)]
+pub enum SnitchrsDirection {
+    Ingress,
+    Egress,
+}
+
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub enum SnitchrsEvent {
     Connect {
-        ip: u32,
-        local_port: u16,
+        remote_ip: u32,
         remote_port: u16,
+        local_port: u16,
+        direction: SnitchrsDirection,
     },
-    IngressTraffic {
-        ip: u32,
+    Traffic {
+        remote_ip: u32,
         remote_port: u16,
         local_port: u16,
         payload_size: u16,
-    },
-    EgressTraffic {
-        ip: u32,
-        remote_port: u16,
-        local_port: u16,
-        payload_size: u16,
+        direction: SnitchrsDirection,
     },
     Disconnect {
-        ip: u32,
+        remote_ip: u32,
         remote_port: u16,
         local_port: u16,
+        direction: SnitchrsDirection,
     },
 }
 impl SnitchrsEvent {
     #[inline]
-    pub fn new_connect(ip: u32, local_port: u16, remote_port: u16) -> Self {
+    pub fn new_connect(
+        remote_ip: u32,
+        local_port: u16,
+        remote_port: u16,
+        direction: SnitchrsDirection,
+    ) -> Self {
         Self::Connect {
-            ip,
+            remote_ip,
             local_port,
             remote_port,
+            direction,
         }
     }
 
     #[inline]
-    pub fn new_disconnect(ip: u32, remote_port: u16, local_port: u16) -> Self {
+    pub fn new_disconnect(
+        remote_ip: u32,
+        remote_port: u16,
+        local_port: u16,
+        direction: SnitchrsDirection,
+    ) -> Self {
         Self::Disconnect {
-            ip,
+            remote_ip,
             remote_port,
             local_port,
+            direction,
         }
     }
     #[inline]
-    pub fn new_ingress_traffic(
-        ip: u32,
+    pub fn new_traffic(
+        remote_ip: u32,
         remote_port: u16,
         local_port: u16,
         payload_size: u16,
+        direction: SnitchrsDirection,
     ) -> Self {
-        Self::IngressTraffic {
-            ip,
+        Self::Traffic {
+            remote_ip,
             remote_port,
             local_port,
             payload_size,
-        }
-    }
-    #[inline]
-    pub fn new_egress_traffic(
-        ip: u32,
-        remote_port: u16,
-        local_port: u16,
-        payload_size: u16,
-    ) -> Self {
-        Self::EgressTraffic {
-            ip,
-            remote_port,
-            local_port,
-            payload_size,
-        }
-    }
-    pub fn get_ip(&self) -> u32 {
-        match self {
-            Self::Connect { ip, .. } => *ip,
-            Self::Disconnect { ip, .. } => *ip,
-            Self::IngressTraffic { ip, .. } => *ip,
-            Self::EgressTraffic { ip, .. } => *ip,
+            direction,
         }
     }
 }

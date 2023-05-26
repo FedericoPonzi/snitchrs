@@ -9,7 +9,7 @@ use clap::Parser;
 use log::{info, warn};
 use procfs::net::TcpState;
 use procfs::process::{all_processes, FDTarget};
-use snitchrs_common::SnitchrsEvent;
+use snitchrs_common::{SnitchrsDirection, SnitchrsEvent};
 use std::convert::TryFrom;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
@@ -140,56 +140,52 @@ fn ip_string(ip: u32) -> String {
 }
 
 fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error> {
+    let dir_to_str = |dir: &SnitchrsDirection| match *dir {
+        SnitchrsDirection::Ingress => "==ingress==>",
+        SnitchrsDirection::Egress => "<==egress==",
+    };
     Ok(match snitcher {
         SnitchrsEvent::Connect {
-            ip,
+            remote_ip,
             remote_port,
             local_port,
+            direction,
         } => {
             format!(
-                "Connect to ip = {} on port {} from port {}",
-                ip_string(*ip),
+                "connect {}:{} {} :{}",
+                ip_string(*remote_ip),
                 local_port,
+                dir_to_str(direction),
                 remote_port,
             )
         }
         SnitchrsEvent::Disconnect {
-            ip,
+            remote_ip,
             remote_port,
             local_port,
+            direction,
         } => {
             format!(
-                "Disconnect from ip = {} on port {} from port {}",
-                ip_string(*ip),
-                local_port,
+                "disconnect {}:{} :{}  from port {} ",
+                ip_string(*remote_ip),
                 remote_port,
+                dir_to_str(direction),
+                local_port,
             )
         }
-        SnitchrsEvent::IngressTraffic {
-            ip,
+        SnitchrsEvent::Traffic {
+            remote_ip,
             payload_size,
             local_port,
             remote_port,
+            direction,
         } => {
             format!(
-                "Ingress from ip = {} on port {}, to local port: {} with payload size = {}",
-                ip_string(*ip),
+                "traffic {}:{} {} :{} - payload size = {}",
+                ip_string(*remote_ip),
                 remote_port,
+                dir_to_str(direction),
                 local_port,
-                payload_size,
-            )
-        }
-        SnitchrsEvent::EgressTraffic {
-            ip,
-            remote_port,
-            local_port,
-            payload_size,
-        } => {
-            format!(
-                "Egress to ip = {} on port {}, from local port: {} with payload size = {}",
-                ip_string(*ip),
-                local_port,
-                remote_port,
                 payload_size,
             )
         }
