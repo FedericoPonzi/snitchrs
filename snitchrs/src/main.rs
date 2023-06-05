@@ -1,6 +1,6 @@
 use aya::maps::perf::PerfBufferError;
 use aya::maps::AsyncPerfEventArray;
-use aya::programs::{tc, SchedClassifier, TcAttachType};
+use aya::programs::{tc, SchedClassifier, TcAttachType, UProbe};
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
@@ -79,16 +79,18 @@ async fn main() -> Result<(), anyhow::Error> {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
     }
-    let mut bpf_w = Pin::new(Box::new(bpf));
-    let program: &mut SchedClassifier = bpf_w.program_mut("snitchrs").unwrap().try_into()?;
+    let program: &mut SchedClassifier = bpf.program_mut("snitchrs").unwrap().try_into()?;
     program.load()?;
     program.attach(&opt.iface, TcAttachType::Egress)?;
-    let program: &mut SchedClassifier =
-        bpf_w.program_mut("snitchrs_ingress").unwrap().try_into()?;
+    let program: &mut SchedClassifier = bpf.program_mut("snitchrs_ingress").unwrap().try_into()?;
     program.load()?;
     program.attach(&opt.iface, TcAttachType::Ingress)?;
 
-    let mut perf_array = AsyncPerfEventArray::try_from(bpf_w.take_map("EVENT_QUEUE").unwrap())?;
+    let program: &mut UProbe = bpf.program_mut("snitchrs_connect").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("connect"), 0, "libc", None)?;
+
+    let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENT_QUEUE").unwrap())?;
     let cpus = online_cpus()?;
     let num_cpus = cpus.len();
 
@@ -112,10 +114,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     let buf = &mut buffers[i];
                     let ptr = buf.as_ptr() as *const SnitchrsEvent;
                     let snitchrs_event = unsafe { ptr.read_unaligned() };
-                    info!(
-                        "snitchr event: {}",
-                        snitcher_to_string(&snitchrs_event).unwrap()
-                    );
+                    println!("{}", snitcher_to_string(&snitchrs_event)?)
                 }
             }
 
@@ -138,11 +137,10 @@ fn ip_string(ip: u32) -> String {
     let ipv4_addr = Ipv4Addr::from(ip);
     ipv4_addr.to_string()
 }
-
 fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error> {
     let dir_to_str = |dir: &SnitchrsDirection| match *dir {
-        SnitchrsDirection::Ingress => "==ingress==>",
-        SnitchrsDirection::Egress => "<==egress==",
+        SnitchrsDirection::Ingress => "ingress",
+        SnitchrsDirection::Egress => "egress",
     };
     Ok(match snitcher {
         SnitchrsEvent::Connect {
@@ -152,10 +150,10 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             direction,
         } => {
             format!(
-                "connect {}:{} {} :{}",
+                "connect_{} {}:{} :{}",
+                dir_to_str(direction),
                 ip_string(*remote_ip),
                 local_port,
-                dir_to_str(direction),
                 remote_port,
             )
         }
@@ -166,10 +164,10 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             direction,
         } => {
             format!(
-                "disconnect {}:{} :{}  from port {} ",
+                "disconnect_{} {}:{} :{} ",
+                dir_to_str(direction),
                 ip_string(*remote_ip),
                 remote_port,
-                dir_to_str(direction),
                 local_port,
             )
         }
@@ -181,12 +179,25 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             direction,
         } => {
             format!(
-                "traffic {}:{} {} :{} - payload size = {}",
+                "traffic_{} {}:{} :{} {}",
+                dir_to_str(direction),
                 ip_string(*remote_ip),
                 remote_port,
-                dir_to_str(direction),
                 local_port,
                 payload_size,
+            )
+        }
+        SnitchrsEvent::ConnectFunc {
+            destination_ip,
+            destination_port,
+            pid,
+            ..
+        } => {
+            format!(
+                "connect_func {}:{} {}",
+                ip_string(*destination_ip),
+                destination_port,
+                pid
             )
         }
     })

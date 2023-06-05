@@ -3,10 +3,8 @@
 #[cfg(feature = "user")]
 use aya::Pod;
 
-use core::fmt;
-
 #[derive(Copy, Clone, Eq, PartialEq)]
-#[repr(C)]
+#[repr(u8)]
 pub enum SnitchrsDirection {
     Ingress,
     Egress,
@@ -33,6 +31,12 @@ pub enum SnitchrsEvent {
         remote_port: u16,
         local_port: u16,
         direction: SnitchrsDirection,
+    },
+    ConnectFunc {
+        destination_ip: u32,
+        pid: u32,
+        destination_port: u16,
+        padd: u16, // just used for padding, otherwise the load will complain. See point #10: https://docs.cilium.io/en/v1.7/bpf/
     },
 }
 impl SnitchrsEvent {
@@ -79,6 +83,15 @@ impl SnitchrsEvent {
             local_port,
             payload_size,
             direction,
+        }
+    }
+    #[inline]
+    pub fn new_connect_func(destination_ip: u32, destination_port: u16, pid: u32) -> Self {
+        Self::ConnectFunc {
+            destination_ip,
+            destination_port,
+            pid,
+            padd: 0,
         }
     }
 }
