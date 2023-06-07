@@ -122,18 +122,18 @@ async fn main() -> Result<(), anyhow::Error> {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
     }
-    /*let program: &mut SchedClassifier = bpf.program_mut("snitchrs").unwrap().try_into()?;
-        program.load()?;
-        program.attach(&opt.iface, TcAttachType::Egress)?;
+    let program: &mut SchedClassifier = bpf.program_mut("snitchrs").unwrap().try_into()?;
+    program.load()?;
+    program.attach(&opt.iface, TcAttachType::Egress)?;
 
-        let program: &mut SchedClassifier = bpf.program_mut("snitchrs_ingress").unwrap().try_into()?;
-        program.load()?;
-        program.attach(&opt.iface, TcAttachType::Ingress)?;
+    let program: &mut SchedClassifier = bpf.program_mut("snitchrs_ingress").unwrap().try_into()?;
+    program.load()?;
+    program.attach(&opt.iface, TcAttachType::Ingress)?;
 
-        let program: &mut KProbe = bpf.program_mut("snitchrs_connect").unwrap().try_into()?;
-        program.load()?;
-        program.attach(&syscall_fnname_add_prefix("connect")?, 0)?;
-    */
+    let program: &mut KProbe = bpf.program_mut("snitchrs_connect").unwrap().try_into()?;
+    program.load()?;
+    program.attach(&syscall_fnname_add_prefix("connect")?, 0)?;
+
     let program: &mut KProbe = bpf.program_mut("snitchrs_accept").unwrap().try_into()?;
     program.load()?;
     program.attach(&syscall_fnname_add_prefix("accept4")?, 0)?;

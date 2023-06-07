@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(strict_provenance)]
 #![no_main]
+
 use aya_bpf::bindings::{sa_family_t, sockaddr};
 use aya_bpf::bindings::{TC_ACT_PIPE, TC_ACT_SHOT};
 use aya_bpf::helpers::{
@@ -10,6 +11,7 @@ use aya_bpf::macros::{classifier, map};
 use aya_bpf::maps::{HashMap, PerfEventArray};
 use aya_bpf::programs::{ProbeContext, TcContext};
 use aya_log_ebpf::{debug, error, info};
+use core::cell::UnsafeCell;
 mod bindings_linux_in;
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -157,10 +159,6 @@ fn try_kprobe_connect_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
     let sockaddr: *const sockaddr = regs.arg(1).ok_or(1i64)?;
     let (ip, port) = parse_sockaddr(sockaddr)?.ok_or(1i64)?;
     let pid = bpf_get_current_pid_tgid() as u32;
-    debug!(
-        ctx,
-        "try_kprobe_connect_tcp: pid: {}, address: {:ipv4}", pid, ip,
-    );
     let event = &SnitchrsEvent::new_connect_func(ip, port, pid);
     EVENT_QUEUE.output(ctx, event, 0);
     Ok(0)
@@ -187,8 +185,8 @@ fn parse_sockaddr(sockaddr: *const sockaddr) -> Result<Option<(u32, u16)>, i64> 
 
 //-------------------------
 
-#[map]
-static ACCEPT_TID_ARGS_MAP: HashMap<u64, sockaddr> = HashMap::with_max_entries(0, 0);
+#[map()]
+static ACCEPT_TID_ARGS_MAP: HashMap<u64, usize> = HashMap::with_max_entries(1024, 0);
 
 #[kprobe(name = "snitchrs_accept")]
 pub fn kprobe_accept_tcp(ctx: ProbeContext) -> u32 {
@@ -199,30 +197,19 @@ pub fn kprobe_accept_tcp(ctx: ProbeContext) -> u32 {
                 Ok(rt) => rt,
                 Err(_) => 1,
             };
-            if err != 2 {
-                debug!(&ctx, "Error! err: {}", err);
-            }
             err
         }
     }
 }
 
+#[inline]
 pub fn try_kprobe_accept_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
     let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
     let sock_addr: *const sockaddr = regs.arg(1).ok_or(2i64)?;
     if sock_addr.is_null() {
         return Ok(0);
     }
-    ACCEPT_TID_ARGS_MAP.insert(
-        &bpf_get_current_pid_tgid(),
-        unsafe { core::mem::transmute(sock_addr) },
-        0,
-    )?;
-    debug!(
-        ctx,
-        "try_kprobe_accept_tcp: saved, tgid: {}",
-        bpf_get_current_pid_tgid()
-    );
+    ACCEPT_TID_ARGS_MAP.insert(&bpf_get_current_pid_tgid(), &unsafe { sock_addr.addr() }, 0)?;
     Ok(0)
 }
 
@@ -235,9 +222,6 @@ pub fn kprobe_syscall_accept_ret(ctx: ProbeContext) -> u32 {
                 Ok(rt) => rt,
                 Err(_) => 1,
             };
-            if err != 2 {
-                debug!(&ctx, "Error! err: {}", err);
-            }
             err
         }
     }
@@ -247,17 +231,17 @@ pub fn kprobe_syscall_accept_ret(ctx: ProbeContext) -> u32 {
 fn try_kprobe_syscall_accept_ret(ctx: &ProbeContext) -> Result<u32, i64> {
     // int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
     // int accept4(int sockfd, struct sockaddr *addr,socklen_t *addrlen, int flags);
-    debug!(ctx, "try_uprobe_accept_tcp: called");
-    let sock_addr: &sockaddr = unsafe {
+    let as_addr = unsafe {
         ACCEPT_TID_ARGS_MAP
             .get(&bpf_get_current_pid_tgid())
             .ok_or(1i64)?
     };
     ACCEPT_TID_ARGS_MAP.remove(&bpf_get_current_pid_tgid())?;
 
+    let sock_addr: *const sockaddr = unsafe { (*as_addr) as *const sockaddr };
+
     let family =
         unsafe { ((bpf_probe_read_user(&*sock_addr)).map_err(|e| 5i64)? as sockaddr).sa_family };
-    info!(ctx, "try_uprobe_accept_tcp: family: {}", family);
     // First we need to get the family, then we can use it to cast the sockaddr to a more specific type
     // Also, it helps filter out UDS and IPv6 connections.
     if family != AF_INET as sa_family_t {
@@ -269,10 +253,6 @@ fn try_kprobe_syscall_accept_ret(ctx: &ProbeContext) -> Result<u32, i64> {
     let port = u16::from_be(sock_in.sin_port);
 
     let pid = bpf_get_current_pid_tgid() as u32;
-    debug!(
-        ctx,
-        "try_kprobe_connect_tcp: pid: {}, address: {:ipv4}", pid, ip,
-    );
     let event = &SnitchrsEvent::new_accept_func(ip, port, pid);
     EVENT_QUEUE.output(ctx, event, 0);
     Ok(0)
