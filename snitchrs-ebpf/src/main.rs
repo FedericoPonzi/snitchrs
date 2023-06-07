@@ -7,7 +7,7 @@ use aya_bpf::helpers::{
     bpf_get_current_pid_tgid, bpf_probe_read, bpf_probe_read_kernel, bpf_probe_read_user,
 };
 use aya_bpf::macros::{classifier, map};
-use aya_bpf::maps::PerfEventArray;
+use aya_bpf::maps::{HashMap, PerfEventArray};
 use aya_bpf::programs::{ProbeContext, TcContext};
 use aya_log_ebpf::{debug, error, info};
 mod bindings_linux_in;
@@ -130,7 +130,7 @@ fn is_fin_packet(packet: &TcpHdr) -> bool {
 }
 
 use crate::bindings_linux_in::{__be32, __kernel_sa_family_t, in_addr, sockaddr_in};
-use aya_bpf::macros::{kprobe, uprobe};
+use aya_bpf::macros::{kprobe, kretprobe};
 use aya_bpf::PtRegs;
 
 const AF_INET: u16 = 2;
@@ -140,92 +140,125 @@ const AF_INET6: u16 = 10;
 pub fn uprobe_connect_tcp(ctx: ProbeContext) -> u32 {
     match try_kprobe_connect_tcp(&ctx) {
         Ok(ret) => ret,
-        Err(err) => {
-            error!(&ctx, "ebpf_kprobe_connect_func: error: {}", err);
-            1
-        }
-    }
-}
-
-fn try_kprobe_connect_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
-    //  int connect(int sockfd, const struct sockaddr *addr,
-    //                    socklen_t addrlen);
-    let pid = bpf_get_current_pid_tgid() as u32;
-    if ctx.regs.is_null() {
-        return Ok(0);
-    }
-    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
-    let sockaddr: *const sockaddr = regs.arg(1).ok_or(1i64)?;
-
-    //debug!(ctx, "{}, addrs: {}", pid, regs.arg::<u64>(1).unwrap());
-    //debug!(ctx, "{}, addrs: {}", pid, regs.arg::<u64>(2).unwrap());
-    if sockaddr.is_null() {
-        return Ok(0);
-    }
-    let family =
-        unsafe { ((bpf_probe_read_user(&*sockaddr)).map_err(|e| e)? as sockaddr).sa_family };
-    // First we need to get the family, then we can use it to cast the sockaddr to a more specific type
-    // Also, it helps filter out UDS and IPv6 connections.
-    if family != AF_INET as sa_family_t {
-        return Ok(0);
-    }
-    let s_in: *const sockaddr_in = unsafe { core::mem::transmute(sockaddr) };
-
-    let addr: in_addr =
-        unsafe { bpf_probe_read_user(&(*s_in).sin_addr as *const in_addr).map_err(|e| e)? };
-    info!(ctx, "address: {:ipv4}", u32::from_be(addr.s_addr));
-    // let port = unsafe {
-    //     bpf_probe_read_kernel(&(*sockaddr).sin_port as *const crate::bindings_linux_in::__be16)
-    //         .map_err(|e| 3)?
-    // };
-    //
-    // let s_addr = unsafe { bpf_probe_read_kernel(&(addr).s_addr as *const __be32).map_err(|e| 4)? };
-    // let ip = u32::from_be(s_addr);
-    // if family == AF_INET6 {
-    //     let event = &SnitchrsEvent::new_connect_func(ip, port, pid);
-    //     info!(ctx, "connect_func: {:ipv4}, {}", ip, port);
-    //     unsafe {
-    //         EVENT_QUEUE.output(ctx, event, 0);
-    //     }
-    // }
-    Ok(0)
-}
-
-//-------------------------
-#[kprobe(name = "snitchrs_accept")]
-pub fn uprobe_accept_tcp(ctx: ProbeContext) -> u32 {
-    match try_uprobe_accept_tcp(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => match ret.try_into() {
+        Err(err) => match err.try_into() {
             Ok(rt) => rt,
             Err(_) => 1,
         },
     }
 }
 
+fn try_kprobe_connect_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
+    //  int connect(int sockfd, const struct sockaddr *addr,
+    //                    socklen_t addrlen);
+    if ctx.regs.is_null() {
+        return Ok(0);
+    }
+    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
+    let sockaddr: *const sockaddr = regs.arg(1).ok_or(1i64)?;
+    let (ip, port) = parse_sockaddr(sockaddr)?.ok_or(1i64)?;
+    let pid = bpf_get_current_pid_tgid() as u32;
+    debug!(
+        ctx,
+        "try_kprobe_connect_tcp: pid: {}, address: {:ipv4}", pid, ip,
+    );
+    let event = &SnitchrsEvent::new_connect_func(ip, port, pid);
+    EVENT_QUEUE.output(ctx, event, 0);
+    Ok(0)
+}
 #[inline]
-fn try_uprobe_accept_tcp(ctx: ProbeContext) -> Result<u32, i64> {
-    //info!(&ctx, "Called accept");
-    //  int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
-    // let sockaddr: *mut sockaddr_in = ctx.arg(1).ok_or(1i64)?;
-    // let family = unsafe {
-    //     bpf_probe_read_kernel(&(*sockaddr).sin_family as *const __kernel_sa_family_t)
-    //         .map_err(|e| e)?
-    // };
-    // let addr: in_addr =
-    //     unsafe { bpf_probe_read_kernel(&(*sockaddr).sin_addr as *const in_addr).map_err(|e| e)? };
-    // let port = unsafe {
-    //     bpf_probe_read_kernel(&(*sockaddr).sin_port as *const crate::bindings_linux_in::__be16)
-    //         .map_err(|e| e)?
-    // };
-    //
-    // let pid = bpf_get_current_pid_tgid() as u32;
-    //
-    // let s_addr = unsafe { bpf_probe_read_kernel(&(addr).s_addr as *const __be32).map_err(|e| e)? };
-    // let ip = u32::from_be(s_addr);
-    // if family == AF_INET {
-    //     let event = &SnitchrsEvent::new_accept_func(ip, port, pid);
-    //     EVENT_QUEUE.output(&ctx, event, 0);
-    // }
+fn parse_sockaddr(sockaddr: *const sockaddr) -> Result<Option<(u32, u16)>, i64> {
+    if sockaddr.is_null() {
+        return Ok(None);
+    }
+
+    let family =
+        unsafe { ((bpf_probe_read_user(&*sockaddr)).map_err(|e| 5i64)? as sockaddr).sa_family };
+    // First we need to get the family, then we can use it to cast the sockaddr to a more specific type
+    // Also, it helps filter out UDS and IPv6 connections.
+    if family != AF_INET as sa_family_t {
+        return Ok(None);
+    }
+    let sock_in_addr: *const sockaddr_in = unsafe { core::mem::transmute(sockaddr) };
+    let sock_in: sockaddr_in = unsafe { bpf_probe_read_user(sock_in_addr)? };
+    let ip = u32::from_be(sock_in.sin_addr.s_addr);
+    let port = u16::from_be(sock_in.sin_port);
+    Ok(Some((ip, port)))
+}
+
+//-------------------------
+
+#[map]
+static ACCEPT_TID_ARGS_MAP: HashMap<u32, sockaddr> = HashMap::with_max_entries(0, 0);
+
+#[kprobe(name = "snitchrs_accept")]
+pub fn kprobe_accept_tcp(ctx: ProbeContext) -> u32 {
+    match try_kprobe_accept_tcp(&ctx) {
+        Ok(ret) => ret,
+        Err(ret) => {
+            let err = match ret.try_into() {
+                Ok(rt) => rt,
+                Err(_) => 1,
+            };
+            if err != 2 {
+                debug!(&ctx, "Error! err: {}", err);
+            }
+            err
+        }
+    }
+}
+
+pub fn try_kprobe_accept_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
+    ACCEPT_TID_ARGS_MAP.insert(ctx.pid, ctx.arg(0).ok_or(1u32)?, 0)?;
+    Ok(0)
+}
+
+#[kretprobe(name = "snitchrs_accept_ret")]
+pub fn kprobe_accept_tcp_ret(ctx: ProbeContext) -> u32 {
+    match try_uprobe_accept_tcp(&ctx) {
+        Ok(ret) => ret,
+        Err(ret) => {
+            let err = match ret.try_into() {
+                Ok(rt) => rt,
+                Err(_) => 1,
+            };
+            if err != 2 {
+                debug!(&ctx, "Error! err: {}", err);
+            }
+            err
+        }
+    }
+}
+
+#[inline]
+fn try_uprobe_accept_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
+    // int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+    // int accept4(int sockfd, struct sockaddr *addr,socklen_t *addrlen, int flags);
+    debug!(ctx, "try_uprobe_accept_tcp: called");
+    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
+    let sockaddr: *const sockaddr = regs.arg(1).ok_or(2i64)?;
+
+    if sockaddr.is_null() {
+        return Ok(0);
+    }
+    let family =
+        unsafe { ((bpf_probe_read_user(&*sockaddr)).map_err(|e| 5i64)? as sockaddr).sa_family };
+    info!(ctx, "try_uprobe_accept_tcp: family: {}", family);
+    // First we need to get the family, then we can use it to cast the sockaddr to a more specific type
+    // Also, it helps filter out UDS and IPv6 connections.
+    if family != AF_INET as sa_family_t {
+        return Ok(0);
+    }
+    let sock_in_addr: *const sockaddr_in = unsafe { core::mem::transmute(sockaddr) };
+    let sock_in: sockaddr_in = unsafe { bpf_probe_read_user(sock_in_addr)? };
+    let ip = u32::from_be(sock_in.sin_addr.s_addr);
+    let port = u16::from_be(sock_in.sin_port);
+
+    let pid = bpf_get_current_pid_tgid() as u32;
+    debug!(
+        ctx,
+        "try_kprobe_connect_tcp: pid: {}, address: {:ipv4}", pid, ip,
+    );
+    let event = &SnitchrsEvent::new_accept_func(ip, port, pid);
+    EVENT_QUEUE.output(ctx, event, 0);
     Ok(0)
 }
