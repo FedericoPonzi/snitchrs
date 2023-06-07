@@ -137,7 +137,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut KProbe = bpf.program_mut("snitchrs_accept").unwrap().try_into()?;
     program.load()?;
     program.attach(&syscall_fnname_add_prefix("accept4")?, 0)?;
-    //program.attach(&syscall_fnname_add_prefix("accept")?, 0)?;
+    program.attach(&syscall_fnname_add_prefix("accept")?, 0)?;
+
+    let program: &mut KProbe = bpf.program_mut("snitchrs_accept_ret").unwrap().try_into()?;
+    program.load()?;
+    program.attach(&syscall_fnname_add_prefix("accept4")?, 0)?;
+    program.attach(&syscall_fnname_add_prefix("accept")?, 0)?;
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENT_QUEUE").unwrap())?;
     let cpus = online_cpus()?;

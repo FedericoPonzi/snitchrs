@@ -188,7 +188,7 @@ fn parse_sockaddr(sockaddr: *const sockaddr) -> Result<Option<(u32, u16)>, i64> 
 //-------------------------
 
 #[map]
-static ACCEPT_TID_ARGS_MAP: HashMap<u32, sockaddr> = HashMap::with_max_entries(0, 0);
+static ACCEPT_TID_ARGS_MAP: HashMap<u64, sockaddr> = HashMap::with_max_entries(0, 0);
 
 #[kprobe(name = "snitchrs_accept")]
 pub fn kprobe_accept_tcp(ctx: ProbeContext) -> u32 {
@@ -208,13 +208,27 @@ pub fn kprobe_accept_tcp(ctx: ProbeContext) -> u32 {
 }
 
 pub fn try_kprobe_accept_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
-    ACCEPT_TID_ARGS_MAP.insert(ctx.pid, ctx.arg(0).ok_or(1u32)?, 0)?;
+    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
+    let sock_addr: *const sockaddr = regs.arg(1).ok_or(2i64)?;
+    if sock_addr.is_null() {
+        return Ok(0);
+    }
+    ACCEPT_TID_ARGS_MAP.insert(
+        &bpf_get_current_pid_tgid(),
+        unsafe { core::mem::transmute(sock_addr) },
+        0,
+    )?;
+    debug!(
+        ctx,
+        "try_kprobe_accept_tcp: saved, tgid: {}",
+        bpf_get_current_pid_tgid()
+    );
     Ok(0)
 }
 
 #[kretprobe(name = "snitchrs_accept_ret")]
-pub fn kprobe_accept_tcp_ret(ctx: ProbeContext) -> u32 {
-    match try_uprobe_accept_tcp(&ctx) {
+pub fn kprobe_syscall_accept_ret(ctx: ProbeContext) -> u32 {
+    match try_kprobe_syscall_accept_ret(&ctx) {
         Ok(ret) => ret,
         Err(ret) => {
             let err = match ret.try_into() {
@@ -230,25 +244,26 @@ pub fn kprobe_accept_tcp_ret(ctx: ProbeContext) -> u32 {
 }
 
 #[inline]
-fn try_uprobe_accept_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
+fn try_kprobe_syscall_accept_ret(ctx: &ProbeContext) -> Result<u32, i64> {
     // int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
     // int accept4(int sockfd, struct sockaddr *addr,socklen_t *addrlen, int flags);
     debug!(ctx, "try_uprobe_accept_tcp: called");
-    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
-    let sockaddr: *const sockaddr = regs.arg(1).ok_or(2i64)?;
+    let sock_addr: &sockaddr = unsafe {
+        ACCEPT_TID_ARGS_MAP
+            .get(&bpf_get_current_pid_tgid())
+            .ok_or(1i64)?
+    };
+    ACCEPT_TID_ARGS_MAP.remove(&bpf_get_current_pid_tgid())?;
 
-    if sockaddr.is_null() {
-        return Ok(0);
-    }
     let family =
-        unsafe { ((bpf_probe_read_user(&*sockaddr)).map_err(|e| 5i64)? as sockaddr).sa_family };
+        unsafe { ((bpf_probe_read_user(&*sock_addr)).map_err(|e| 5i64)? as sockaddr).sa_family };
     info!(ctx, "try_uprobe_accept_tcp: family: {}", family);
     // First we need to get the family, then we can use it to cast the sockaddr to a more specific type
     // Also, it helps filter out UDS and IPv6 connections.
     if family != AF_INET as sa_family_t {
         return Ok(0);
     }
-    let sock_in_addr: *const sockaddr_in = unsafe { core::mem::transmute(sockaddr) };
+    let sock_in_addr: *const sockaddr_in = unsafe { core::mem::transmute(sock_addr) };
     let sock_in: sockaddr_in = unsafe { bpf_probe_read_user(sock_in_addr)? };
     let ip = u32::from_be(sock_in.sin_addr.s_addr);
     let port = u16::from_be(sock_in.sin_port);
