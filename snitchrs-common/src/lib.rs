@@ -38,6 +38,12 @@ pub enum SnitchrsEvent {
         destination_port: u16,
         padd: u16, // just used for padding, otherwise the load will complain. See point #10: https://docs.cilium.io/en/v1.7/bpf/
     },
+    AcceptFunc {
+        source_ip: u32,
+        pid: u32,
+        source_port: u16,
+        padd: u16, // just used for padding, otherwise the load will complain. See point #10: https://docs.cilium.io/en/v1.7/bpf/
+    },
 }
 impl SnitchrsEvent {
     #[inline]
@@ -90,6 +96,15 @@ impl SnitchrsEvent {
         Self::ConnectFunc {
             destination_ip,
             destination_port,
+            pid,
+            padd: 0,
+        }
+    }
+    #[inline]
+    pub fn new_accept_func(source_ip: u32, source_port: u16, pid: u32) -> Self {
+        Self::AcceptFunc {
+            source_ip,
+            source_port,
             pid,
             padd: 0,
         }

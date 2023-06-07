@@ -1,6 +1,7 @@
+use crate::utils::syscall_fnname_add_prefix;
 use aya::maps::perf::PerfBufferError;
 use aya::maps::AsyncPerfEventArray;
-use aya::programs::{tc, SchedClassifier, TcAttachType, UProbe};
+use aya::programs::{tc, KProbe, SchedClassifier, TcAttachType, UProbe};
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
@@ -14,6 +15,41 @@ use std::convert::TryFrom;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
 use tokio::signal;
+
+mod utils {
+    use aya::util::kernel_symbols;
+    use std::io;
+
+    /// Find current system's syscall prefix by testing on the BPF syscall.
+    /// If no valid value found, will return the first possible value which
+    /// would probably lead to error in later API calls.
+    pub fn syscall_prefix() -> Result<&'static str, io::Error> {
+        const prefixes: [&str; 7] = [
+            "sys_",
+            "__x64_sys_",
+            "__x32_compat_sys_",
+            "__ia32_compat_sys_",
+            "__arm64_sys_",
+            "__s390x_sys_",
+            "__s390_sys_",
+        ];
+        let ksym = kernel_symbols()?;
+        let values = ksym.into_values().collect::<Vec<_>>();
+        for p in prefixes {
+            if values.contains(&format!("{}bpf", p)) {
+                return Ok(p);
+            }
+        }
+        return Ok(prefixes[0]);
+    }
+
+    /// Given a name, it finds and append the system's syscall prefix to it.
+    /// This function doesn't check if the name is for an existing syscall.
+    /// For example, given "clone" the helper would return "sys_clone" or "__x64_sys_clone".
+    pub fn syscall_fnname_add_prefix(name: &str) -> Result<String, io::Error> {
+        Ok(format!("{}{}", syscall_prefix()?, name))
+    }
+}
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -74,7 +110,14 @@ async fn main() -> Result<(), anyhow::Error> {
     // error adding clsact to the interface if it is already added is harmless
     // the full cleanup can be done with 'sudo tc qdisc del dev eth0 clsact'.
     let _ = tc::qdisc_add_clsact(&opt.iface);
-
+    info!(
+        "{:?}",
+        aya::util::kernel_symbols()?
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+            .contains(&String::from("__x64_sys_bpf"))
+    );
     if let Err(e) = BpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
@@ -82,13 +125,19 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut SchedClassifier = bpf.program_mut("snitchrs").unwrap().try_into()?;
     program.load()?;
     program.attach(&opt.iface, TcAttachType::Egress)?;
+
     let program: &mut SchedClassifier = bpf.program_mut("snitchrs_ingress").unwrap().try_into()?;
     program.load()?;
     program.attach(&opt.iface, TcAttachType::Ingress)?;
 
-    let program: &mut UProbe = bpf.program_mut("snitchrs_connect").unwrap().try_into()?;
+    let program: &mut KProbe = bpf.program_mut("snitchrs_connect").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("connect"), 0, "libc", None)?;
+    program.attach(&syscall_fnname_add_prefix("connect")?, 0)?;
+
+    let program: &mut KProbe = bpf.program_mut("snitchrs_accept").unwrap().try_into()?;
+    program.load()?;
+    program.attach(&syscall_fnname_add_prefix("accept4")?, 0)?;
+    //program.attach(&syscall_fnname_add_prefix("accept")?, 0)?;
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENT_QUEUE").unwrap())?;
     let cpus = online_cpus()?;
@@ -197,6 +246,19 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
                 "connect_func {}:{} {}",
                 ip_string(*destination_ip),
                 destination_port,
+                pid
+            )
+        }
+        SnitchrsEvent::AcceptFunc {
+            source_ip,
+            source_port,
+            pid,
+            ..
+        } => {
+            format!(
+                "accept_func {}:{} {}",
+                ip_string(*source_ip),
+                source_port,
                 pid
             )
         }
