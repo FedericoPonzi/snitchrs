@@ -149,13 +149,12 @@ pub fn uprobe_connect_tcp(ctx: ProbeContext) -> u32 {
     }
 }
 
+#[inline]
 fn try_kprobe_connect_tcp(ctx: &ProbeContext) -> Result<u32, i64> {
+    // syscalls wraps arguments in this regs object.
+    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
     //  int connect(int sockfd, const struct sockaddr *addr,
     //                    socklen_t addrlen);
-    if ctx.regs.is_null() {
-        return Ok(0);
-    }
-    let regs = PtRegs::new(ctx.arg(0).ok_or(1u32)?);
     let sockaddr: *const sockaddr = regs.arg(1).ok_or(1i64)?;
     let (ip, port) = parse_sockaddr(sockaddr)?.ok_or(1i64)?;
     let pid = bpf_get_current_pid_tgid() as u32;
@@ -180,6 +179,11 @@ fn parse_sockaddr(sockaddr: *const sockaddr) -> Result<Option<(u32, u16)>, i64> 
     let sock_in: sockaddr_in = unsafe { bpf_probe_read_user(sock_in_addr)? };
     let ip = u32::from_be(sock_in.sin_addr.s_addr);
     let port = u16::from_be(sock_in.sin_port);
+    let local = 0x7f << 6 * 4 | 0xff; // 127.0.0.x
+                                      // skip 127.0.0.x (for example, 53 might be used for DNS)
+    if ip & local == ip {
+        return Ok(None);
+    }
     Ok(Some((ip, port)))
 }
 

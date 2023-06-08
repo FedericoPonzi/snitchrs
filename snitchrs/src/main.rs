@@ -24,7 +24,7 @@ mod utils {
     /// If no valid value found, will return the first possible value which
     /// would probably lead to error in later API calls.
     pub fn syscall_prefix() -> Result<&'static str, io::Error> {
-        const prefixes: [&str; 7] = [
+        const PREFIXES: [&str; 7] = [
             "sys_",
             "__x64_sys_",
             "__x32_compat_sys_",
@@ -35,12 +35,12 @@ mod utils {
         ];
         let ksym = kernel_symbols()?;
         let values = ksym.into_values().collect::<Vec<_>>();
-        for p in prefixes {
+        for p in PREFIXES {
             if values.contains(&format!("{}bpf", p)) {
                 return Ok(p);
             }
         }
-        return Ok(prefixes[0]);
+        return Ok(PREFIXES[0]);
     }
 
     /// Given a name, it finds and append the system's syscall prefix to it.
@@ -110,14 +110,6 @@ async fn main() -> Result<(), anyhow::Error> {
     // error adding clsact to the interface if it is already added is harmless
     // the full cleanup can be done with 'sudo tc qdisc del dev eth0 clsact'.
     let _ = tc::qdisc_add_clsact(&opt.iface);
-    info!(
-        "{:?}",
-        aya::util::kernel_symbols()?
-            .values()
-            .cloned()
-            .collect::<Vec<_>>()
-            .contains(&String::from("__x64_sys_bpf"))
-    );
     if let Err(e) = BpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
@@ -204,7 +196,7 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             direction,
         } => {
             format!(
-                "connect_{} {}:{} :{}",
+                "{}_connect {}:{} :{}",
                 dir_to_str(direction),
                 ip_string(*remote_ip),
                 local_port,
@@ -218,7 +210,7 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             direction,
         } => {
             format!(
-                "disconnect_{} {}:{} :{} ",
+                "{}_disconnect {}:{} :{} ",
                 dir_to_str(direction),
                 ip_string(*remote_ip),
                 remote_port,
@@ -233,7 +225,7 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             direction,
         } => {
             format!(
-                "traffic_{} {}:{} :{} {}",
+                "{}_traffic {}:{} :{} {}",
                 dir_to_str(direction),
                 ip_string(*remote_ip),
                 remote_port,
@@ -248,7 +240,7 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             ..
         } => {
             format!(
-                "connect_func {}:{} {}",
+                "syscall_connect {}:{} {}",
                 ip_string(*destination_ip),
                 destination_port,
                 pid
@@ -261,7 +253,7 @@ fn snitcher_to_string(snitcher: &SnitchrsEvent) -> Result<String, anyhow::Error>
             ..
         } => {
             format!(
-                "accept_func {}:{} {}",
+                "syscall_accept {}:{} {}",
                 ip_string(*source_ip),
                 source_port,
                 pid
