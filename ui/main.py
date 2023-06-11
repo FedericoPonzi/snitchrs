@@ -1,11 +1,15 @@
 import sys
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QThread
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QHBoxLayout, QScrollArea
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QThread, QSize
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 from datetime import datetime
 from dataclasses import dataclass, field
 
+
+## todo:
+# at the beginning of the ebpf, we might have missed some connect call, we can lookup the pids for the local port
+# in proc fs.
 
 @dataclass
 class SyscallEvent:
@@ -78,60 +82,134 @@ class PlotThread(QThread):
             pass
 
 
+@dataclass
+class PlotWidgetEntity:
+    curve_received: any
+    curve_transmitted: any
+    time_dps: list
+    received: list
+    transmitted: list
+
+
 # Main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dynamic Plot Example")
+        self.setWindowTitle("Little Snitchrs")
 
         # Create a central widget and a layout
-        central_widget = QWidget(self)
-        layout = QVBoxLayout(central_widget)
+        self.main_layout = QVBoxLayout()
+        self.main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll = QScrollArea()
+        self.main_widget = QWidget()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.main_widget.setLayout(self.main_layout)
+        self.scroll.setWidget(self.main_widget)
+
+        self.setMinimumSize(QSize(900, 600))
 
         # Set the central widget
-        self.setCentralWidget(central_widget)
+        self.setCentralWidget(self.scroll)
         # Initialize the map of plot widgets
         self.plot_widgets = {}
+        self.pids = []
+
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_plot)
         self.timer.start(1000)
 
+    def add_row(self, pid):
+        widget = QLabel("PID: " + str(pid))
+        font = widget.font()
+        font.setPointSize(30)
+        row = QHBoxLayout()
+        row.addWidget(widget)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+
+    def remove_row(self, pid):
+        del self.plot_widgets[pid]
+
     def add_plot(self, ip, local_port):
-        plot_widget = pg.PlotWidget()
+        date_axis = pg.graphicsItems.DateAxisItem.DateAxisItem(orientation='bottom')
+        plot_widget = pg.PlotWidget(axisItems={'bottom': date_axis}, )
+
         current_time = datetime.now().timestamp()
-        self.plot_widgets[ip + local_port] = (plot_widget, [[current_time], [0]])
-        self.centralWidget().layout().addWidget(plot_widget)
+
+        label = QLabel("PID: " + str(local_port))
+        font = label.font()
+        font.setPointSize(30)
+        row = QHBoxLayout()
+        row.addWidget(label)
+        row.addWidget(plot_widget)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        widget = QWidget()
+        widget.setLayout(row)
+        widget.setMinimumSize(QSize(500, 150))
+
+        self.main_layout.addWidget(widget)
         plot_widget.setLabel("left", "Received Bytes")
         plot_widget.setLabel("bottom", "Time (s)")
-        _curve = plot_widget.plot(pen='r')
+
+        plot_widget.setLabel("right", "Transmitted Bytes")
+        curve_received = plot_widget.plot(pen='r')
+        curve_transmitted = plot_widget.plot(pen='r')
+        self.plot_widgets[ip + str(local_port)] = PlotWidgetEntity(curve_received, curve_transmitted, [current_time],
+                                                                   [0], [0])
 
     def update_plot(self):
         for key in self.plot_widgets:
-            plot, data = self.plot_widgets[key]
-            plot.plot(data[0], data[1], pen='g')
+            plot_widget_entity = self.plot_widgets[key]
+            plot_widget_entity.curve_received.setData(plot_widget_entity.time_dps, plot_widget_entity.received, pen='r',
+                                                      symbol='o', symbolPen=None, symbolSize=4, symbolBrush=('r'))
+            plot_widget_entity.curve_transmitted.setData(plot_widget_entity.time_dps, plot_widget_entity.transmitted,
+                                                         pen='b', symbol='o', symbolPen=None, symbolSize=4,
+                                                         symbolBrush=('b'))
 
     def add_datapoint_ingress(self, ip, local_port, received):
         # todo, for now, track only new connections.
         if ip + local_port not in self.plot_widgets:
             return
-        (plot, data) = self.plot_widgets[ip + local_port]
+        plot_widget_entity = self.plot_widgets[ip + local_port]
         current_time = datetime.now().timestamp()
-        data[0].append(current_time)
-        data[1].append(received)
+        plot_widget_entity.time_dps.append(current_time)
+        plot_widget_entity.received.append(received)
+
+    def add_datapoint_egress(self, ip, local_port, transmitted):
+        if ip + local_port not in self.plot_widgets:
+            return
+        plot_widget_entity = self.plot_widgets[ip + local_port]
+        current_time = datetime.now().timestamp()
+        plot_widget_entity.time_dps.append(current_time)
+        plot_widget_entity.transmitted.append(transmitted)
+
+    def remove_connection(self, ip, local_port):
+        if ip + local_port not in self.plot_widgets:
+            return
+        del self.plot_widgets[ip + local_port]
 
     @pyqtSlot(object)
     def store_events(self, event):
         print("Received event", event)
         if type(event) is SyscallEvent:
-            print("adding syscall event")
             if event.function == "connect":
+                self.add_plot(event.ip+"1", event.pid)
+                self.add_plot(event.ip+"2", event.pid)
+                self.add_plot(event.ip, event.pid)
+            elif event.function == "accept":
                 self.add_plot(event.ip, event.pid)
         elif type(event) is ControlPacketEvent:
-            print("adding control event")
-            if not event.is_fin_packet:
+            if event.is_fin_packet:
+                self.remove_connection(event.ip, event.local_port)
+            else:
+                # todo: remove
                 self.add_plot(event.ip, event.local_port)
         elif type(event) is TransmissionPacket:
-            print("adding transmission event")
             self.add_datapoint_ingress(event.ip, event.local_port, event.transmitted)
         else:
             print("not supported yet: ", event)
@@ -142,9 +220,6 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
 
     main_window = MainWindow()
-    layout = QVBoxLayout(main_window.centralWidget())
-    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-    main_window.centralWidget().setLayout(layout)
     main_window.show()
 
     plot_thread = PlotThread()

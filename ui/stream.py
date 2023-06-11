@@ -5,7 +5,7 @@ import sys
 event_stream_file = "event_stream.txt"
 
 # Delay between sending each line (in seconds)
-line_delay = 0.5
+line_delay = 0.2
 
 # Read events from the file and send them with a delay
 with open(event_stream_file, "r") as file:
