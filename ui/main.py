@@ -152,7 +152,6 @@ class MainWindow(QMainWindow):
 
         self.webView = QWebEngineView()
         self.webView.setHtml(self.load_map(latitude, longitude), QUrl("about:blank"))
-
         self.main_layout.addWidget(self.webView)
         self.webView.setMinimumSize(QSize(900, 600))
         # Set the central widget
@@ -210,7 +209,7 @@ class MainWindow(QMainWindow):
                         map = L.map('map').setView([""" + str(latitude) + """, """ + str(longitude) + """], 13);
     
                     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        maxZoom: 10,
+                        maxZoom: 3,
                         attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                     }).addTo(map);
 
@@ -223,12 +222,14 @@ class MainWindow(QMainWindow):
                     }
     
                     function addMarker(ip, lat, lng) {
+                        console.log("addMarker", ip, lat, lng);
                         var marker = L.marker([lat, lng]).addTo(map);
                         marker.bindPopup(ip);
                         markers[ip] = marker;
                     }
     
                     function removeMarker(ip) {
+                        console.log("removeMarker", ip);
                         var marker = markers[ip];
                         if (marker) {
                             map.removeLayer(marker);
@@ -237,6 +238,7 @@ class MainWindow(QMainWindow):
                     }
     
                     function addLine(startLat, startLng, endLat, endLng) {
+                        console.log("addLine", startLat, startLng, endLat, endLng);
                         var start = L.latLng(startLat, startLng);
                         var end = L.latLng(endLat, endLng);
                         var line = L.polyline([start, end], {color: 'red'}).addTo(map);
@@ -249,6 +251,7 @@ class MainWindow(QMainWindow):
 
     def add_ip(self, dest_ip_address):
         if dest_ip_address in self.ip_coordinates:
+            print("already have this ip")
             return
         print("dest ip: " + dest_ip_address)
         self.ip_coordinates[dest_ip_address] = self.geolocate_ip(dest_ip_address.split(":")[0])
