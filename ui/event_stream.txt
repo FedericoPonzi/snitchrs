@@ -37,17 +37,17 @@ ingress_traffic 54.218.29.132:443 :50814 23040
 egress_traffic 54.218.29.132:443 :50814 13312
 ingress_traffic 35.155.51.96:443 :34754 23040
 egress_traffic 35.155.51.96:443 :34754 13312
-ingress_connect 192.168.0.10:48476 :8000
-egress_connect 192.168.0.10:48476 :8000
-ingress_traffic 192.168.0.10:48476 :8000 13312
-syscall_accept 192.168.0.10:48476 370496
-ingress_traffic 192.168.0.10:48476 :8000 32257
-egress_traffic 192.168.0.10:48476 :8000 13312
-egress_traffic 192.168.0.10:48476 :8000 52992
-egress_disconnect 192.168.0.10:48476 :8000
-ingress_traffic 192.168.0.10:48476 :8000 13312
-ingress_disconnect 192.168.0.10:48476 :8000
-egress_traffic 192.168.0.10:48476 :8000 13312
+ingress_connect 8.8.8.8:48476 :8000
+egress_connect 8.8.8.8:48476 :8000
+ingress_traffic 8.8.8.8:48476 :8000 13312
+syscall_accept 8.8.8.8:48476 370496
+ingress_traffic 8.8.8.8:48476 :8000 32257
+egress_traffic 8.8.8.8:48476 :8000 13312
+egress_traffic 8.8.8.8:48476 :8000 52992
+egress_disconnect 8.8.8.8:48476 :8000
+ingress_traffic 8.8.8.8:48476 :8000 13312
+ingress_disconnect 8.8.8.8:48476 :8000
+egress_traffic 8.8.8.8:48476 :8000 13312
 egress_traffic 15.197.213.252:443 :58768 25088
 ingress_traffic 15.197.213.252:443 :58768 25088
 egress_traffic 15.197.213.252:443 :58768 13312

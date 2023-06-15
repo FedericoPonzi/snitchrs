@@ -1,9 +1,11 @@
 import io
 import sys
 
+import requests
+from PyQt6.QtWebEngineCore import QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QHBoxLayout, QScrollArea
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QThread, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QThread, QSize, QUrl, QObject
 import pyqtgraph as pg
 import folium
 from pyqtgraph.Qt import QtCore
@@ -36,6 +38,15 @@ class ControlPacketEvent:
     direction: str
     ip: str
     local_port: str
+
+
+def get_my_ip():
+    response = requests.get('http://ipinfo.io/json')
+    if response.status_code == 200:
+        ip_address = response.json()['ip']
+        return ip_address
+    else:
+        raise RuntimeError("Could not get my ip address")
 
 
 # Custom worker thread
@@ -77,7 +88,7 @@ class PlotThread(QThread):
             print("waiting")
             for line in sys.stdin:
                 line = line.strip()  # Remove leading/trailing whitespace
-                print(f"line: '{line}'")
+                # print(f"line: '{line}'")
                 ev = parse_event(line)
                 self.update_signal.emit(ev)  # Emit the signal to add the first plot
 
@@ -85,6 +96,26 @@ class PlotThread(QThread):
             # Handle the case when the user presses Ctrl+C to interrupt the program
             pass
 
+class ConsoleLogger(QObject):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    @pyqtSlot(QWebEnginePage.JavaScriptConsoleMessageLevel, str, int, str)
+    def log_message(self, level, message, line_number, source_id):
+        print(f"Console [{level}]: {message} (line {line_number} in {source_id})")
+
+
+class WebPage(QWebEnginePage):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+        self.emit_console_message(level, message, line_number, source_id)
+
+    console_message = pyqtSignal(QWebEnginePage.JavaScriptConsoleMessageLevel, str, int, str)
+
+    def emit_console_message(self, level, message, line_number, source_id):
+        self.console_message.emit(level, message, line_number, source_id)
 
 @dataclass
 class PlotWidgetEntity:
@@ -101,6 +132,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Little Snitchrs")
 
+        self.ip_coordinates = {}
+        self.my_ip = get_my_ip()
+        latitude, longitude = self.geolocate_ip(self.my_ip)
+        self.ip_coordinates[self.my_ip] = (latitude, longitude)
+
         # Create a central widget and a layout
         self.main_layout = QVBoxLayout()
         self.main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -114,133 +150,133 @@ class MainWindow(QMainWindow):
 
         self.setMinimumSize(QSize(900, 600))
 
-        self.my_coordinates = self.geolocate_ip("37.228.237.52")
-        self.m = folium.Map(
-            tiles='Stamen Terrain',
-            zoom_start=5,
-            location=self.my_coordinates
-        )
-
-        # save map data to data object
-        data = io.BytesIO()
-        self.m.save(data, close_file=False)
-
         self.webView = QWebEngineView()
-        self.webView.setHtml(data.getvalue().decode())
-        self.main_layout.addWidget(self.webView)
+        self.webView.setHtml(self.load_map(latitude, longitude), QUrl("about:blank"))
 
+        self.main_layout.addWidget(self.webView)
+        self.webView.setMinimumSize(QSize(900, 600))
         # Set the central widget
         self.setCentralWidget(self.scroll)
         # Initialize the map of plot widgets
-        self.plot_widgets = {}
-        self.remote_ip_port_to_pid = {}
-        self.pids = []
 
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_plot)
-        self.timer.start(1000)
+        script = f"mapObj.addMarker('{self.my_ip}', {latitude}, {longitude});"
+        self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
 
     def geolocate_ip(self, ip_address):
         import geocoder
         location = geocoder.ip(ip_address)
+        print(ip_address, location)
         latitude, longitude = location.latlng
         return (latitude, longitude)
 
-    def remove_row(self, pid):
-        del self.plot_widgets[pid]
+    def load_map(self, latitude, longitude):
+        return """
+            <!DOCTYPE html>
+<html lang="en">
+<head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <title>Quick Start - Leaflet</title>
+    
+    <link rel="shortcut icon" type="image/x-icon" href="docs/images/favicon.ico" />
 
-    def add_plot(self, pid, local_port=None):
-        date_axis = pg.graphicsItems.DateAxisItem.DateAxisItem(orientation='bottom')
-        plot_widget = pg.PlotWidget(axisItems={'bottom': date_axis}, )
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+        .leaflet-container {
+            height: 400px;
+            width: 600px;
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="map" style="width: 100%; height: 100%;"></div>                
 
-        current_time = datetime.now().timestamp()
+    <script>
+            
+                    var map;
+                    var markers = {};
+                    var lines = {};
+    
+                    function initMap() {
+                        map = L.map('map').setView([""" + str(latitude) + """, """ + str(longitude) + """], 13);
+    
+                    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        maxZoom: 10,
+                        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    }).addTo(map);
 
-        label = QLabel("PID: " + str(pid))
-        font = label.font()
-        font.setPointSize(30)
+    
+                        return {
+                            addMarker: addMarker,
+                            removeMarker: removeMarker,
+                            addLine: addLine
+                        };
+                    }
+    
+                    function addMarker(ip, lat, lng) {
+                        var marker = L.marker([lat, lng]).addTo(map);
+                        marker.bindPopup(ip);
+                        markers[ip] = marker;
+                    }
+    
+                    function removeMarker(ip) {
+                        var marker = markers[ip];
+                        if (marker) {
+                            map.removeLayer(marker);
+                            delete markers[ip];
+                        }
+                    }
+    
+                    function addLine(startLat, startLng, endLat, endLng) {
+                        var start = L.latLng(startLat, startLng);
+                        var end = L.latLng(endLat, endLng);
+                        var line = L.polyline([start, end], {color: 'red'}).addTo(map);
+                        lines[startLat + ',' + startLng + '-' + endLat + ',' + endLng] = line;
+                    }
+                var mapObj = initMap();</script>
+            </body>
+            </html>
+            """
 
-        row = QHBoxLayout()
-        row.addWidget(label)
-        row.addWidget(plot_widget)
-        row.setAlignment(Qt.AlignmentFlag.AlignTop)
-        row.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-        widget = QWidget()
-        widget.setLayout(row)
-        widget.setMinimumSize(QSize(500, 150))
-        folium.PolyLine((self.my_coordinates, self.geolocate_ip(pid.split(":")[0])), tooltip="Coast").add_to(self.m)
-        data = io.BytesIO()
-        self.m.save(data, close_file=False)
-        self.webView.setHtml(data.getvalue().decode())
-
-        self.main_layout.addWidget(widget)
-        plot_widget.setLabel("left", "Received Bytes")
-        plot_widget.setLabel("bottom", "Time (s)")
-
-        plot_widget.setLabel("right", "Transmitted Bytes")
-        curve_received = plot_widget.plot(pen='r')
-        curve_transmitted = plot_widget.plot(pen='r')
-        self.plot_widgets[local_port] = PlotWidgetEntity(curve_received, curve_transmitted,
-                                                         [[current_time][0]], [[current_time], [0]], 1)
-
-    def update_plot(self):
-        for key in self.plot_widgets:
-            plot_widget_entity = self.plot_widgets[key]
-            print(plot_widget_entity)
-            plot_widget_entity.curve_received.setData(plot_widget_entity.received[0], plot_widget_entity.received[1],
-                                                      pen='r', symbol='o', symbolPen=None, symbolSize=4,
-                                                      symbolBrush='r')
-            plot_widget_entity.curve_transmitted.setData(plot_widget_entity.transmitted[0],
-                                                         plot_widget_entity.transmitted[1],
-                                                         pen='b', symbol='o', symbolPen=None, symbolSize=4,
-                                                         symbolBrush='b')
-
-    def add_datapoint(self, ip, received=None, transmitted=None):
-        if ip not in self.remote_ip_port_to_pid:
+    def add_ip(self, dest_ip_address):
+        if dest_ip_address in self.ip_coordinates:
             return
-        pid = self.remote_ip_port_to_pid[ip]
-        plot_widget_entity = self.plot_widgets[pid]
-        current_time = datetime.now().timestamp()
+        print("dest ip: " + dest_ip_address)
+        self.ip_coordinates[dest_ip_address] = self.geolocate_ip(dest_ip_address.split(":")[0])
+        dest_latitude, dest_longitude = self.ip_coordinates[dest_ip_address]
 
-        if received is not None:
-            plot_widget_entity.received[0].append(current_time)
-            plot_widget_entity.received[1].append(received)
-        elif transmitted is not None:
-            plot_widget_entity.transmitted[0].append(current_time)
-            plot_widget_entity.transmitted[1].append(transmitted)
+        script = f"mapObj.addMarker('{dest_ip_address}', {dest_latitude}, {dest_longitude});"
+        self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
 
-    def remove_connection(self, ip, local_port):
-        if local_port not in self.remote_ip_port_to_pid:
-            return
+        latitude, longitude = self.ip_coordinates[self.my_ip]
 
-        pid = self.remote_ip_port_to_pid[ip + local_port]
-        self.plot_widgets[pid].connections -= 1
-        if self.plot_widgets[pid].connections == 0:
-            self.remove_row(pid)
-            del self.plot_widgets[pid]
-        del self.remote_ip_port_to_pid[ip + local_port]
+        script = f"mapObj.addLine({latitude}, {longitude}, {dest_latitude}, {dest_longitude});"
+        self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
+
+    def remove_ip(self, ip_address):
+        if ip_address in self.ip_coordinates:
+            del self.ip_coordinates[ip_address]
+
+            script = f"mapObj.removeMarker('{ip_address}');"
+            self.webView.page().runJavaScript(script)
 
     @pyqtSlot(object)
     def store_events(self, event):
-        print("Received event", event)
-        if type(event) is SyscallEvent:
-            if event.function in ["connect", "accept"]:
-                if event.pid in self.plot_widgets:
-                    self.plot_widgets[event.pid].connections += 1
-                else:
-                    self.add_plot(event.pid, event.local_port)
-        elif type(event) is ControlPacketEvent:
+        if type(event) is ControlPacketEvent and event.direction == "ingress":
+            print("Received event", event)
             if event.is_fin_packet:
-                self.remove_connection(event.ip, event.local_port)
+                self.add_ip(event.ip)
             else:
-                # todo: remove
-                self.add_plot(event.ip, event.local_port)
-        elif type(event) is TransmissionPacket:
-            received = None if event.direction == "egress_traffic" else event.transmitted
-            transmitted = None if event.direction == "ingress_traffic" else event.transmitted
-            self.add_datapoint(event.local_port, received, transmitted)
-        else:
-            print("not supported yet: ", event)
+                self.remove_ip(event.ip)
 
 
 # Application entry point
