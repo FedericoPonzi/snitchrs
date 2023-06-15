@@ -17,14 +17,14 @@ from dataclasses import dataclass
 # at the beginning of the ebpf, we might have missed some connect call, we can lookup the pids for the local port
 # in proc fs.
 
-@dataclass
+@dataclass(eq=True)
 class SyscallEvent:
     function: str
     ip: str
     pid: int
 
 
-@dataclass
+@dataclass(eq=True)
 class TransmissionPacket:
     direction: str
     ip: str
@@ -32,7 +32,7 @@ class TransmissionPacket:
     transmitted: int
 
 
-@dataclass
+@dataclass(eq=True)
 class ControlPacketEvent:
     is_fin_packet: str
     direction: str
@@ -46,7 +46,7 @@ def get_my_ip():
         ip_address = response.json()['ip']
         return ip_address
     else:
-        raise RuntimeError("Could not get my ip address")
+        raise RuntimeError("Could not get my ip address: "+ str(response))
 
 
 # Custom worker thread
@@ -85,37 +85,15 @@ class PlotThread(QThread):
 
     def run(self):
         try:
-            print("waiting")
             for line in sys.stdin:
-                line = line.strip()  # Remove leading/trailing whitespace
-                # print(f"line: '{line}'")
+                line = line.strip()
                 ev = parse_event(line)
-                self.update_signal.emit(ev)  # Emit the signal to add the first plot
+                self.update_signal.emit(ev)
 
         except KeyboardInterrupt:
             # Handle the case when the user presses Ctrl+C to interrupt the program
             pass
 
-class ConsoleLogger(QObject):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-    @pyqtSlot(QWebEnginePage.JavaScriptConsoleMessageLevel, str, int, str)
-    def log_message(self, level, message, line_number, source_id):
-        print(f"Console [{level}]: {message} (line {line_number} in {source_id})")
-
-
-class WebPage(QWebEnginePage):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
-        self.emit_console_message(level, message, line_number, source_id)
-
-    console_message = pyqtSignal(QWebEnginePage.JavaScriptConsoleMessageLevel, str, int, str)
-
-    def emit_console_message(self, level, message, line_number, source_id):
-        self.console_message.emit(level, message, line_number, source_id)
 
 @dataclass
 class PlotWidgetEntity:
@@ -133,7 +111,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Little Snitchrs")
 
         self.ip_coordinates = {}
-        self.my_ip = get_my_ip()
+        try:
+            self.my_ip = get_my_ip()
+        except RuntimeError as e:
+            print(e)
+            sys.exit(1)
         latitude, longitude = self.geolocate_ip(self.my_ip)
         self.ip_coordinates[self.my_ip] = (latitude, longitude)
 
@@ -158,15 +140,14 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.scroll)
         # Initialize the map of plot widgets
 
-        script = f"mapObj.addMarker('{self.my_ip}', {latitude}, {longitude});"
+        script = f"mapObj.addMarker('HomeSweetHome: {self.my_ip}', {latitude}, {longitude});"
         self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
 
     def geolocate_ip(self, ip_address):
         import geocoder
         location = geocoder.ip(ip_address)
-        print(ip_address, location)
         latitude, longitude = location.latlng
-        return (latitude, longitude)
+        return latitude, longitude
 
     def load_map(self, latitude, longitude):
         return """
@@ -209,7 +190,7 @@ class MainWindow(QMainWindow):
                         map = L.map('map').setView([""" + str(latitude) + """, """ + str(longitude) + """], 13);
     
                     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        maxZoom: 3,
+                        maxZoom: 5,
                         attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                     }).addTo(map);
 
@@ -221,15 +202,13 @@ class MainWindow(QMainWindow):
                         };
                     }
     
-                    function addMarker(ip, lat, lng) {
-                        console.log("addMarker", ip, lat, lng);
-                        var marker = L.marker([lat, lng]).addTo(map);
+                    function addMarker(ip, lat, lng, icon) {
+                        var marker = L.marker([lat, lng], icon).addTo(map);
                         marker.bindPopup(ip);
                         markers[ip] = marker;
                     }
     
                     function removeMarker(ip) {
-                        console.log("removeMarker", ip);
                         var marker = markers[ip];
                         if (marker) {
                             map.removeLayer(marker);
@@ -238,12 +217,19 @@ class MainWindow(QMainWindow):
                     }
     
                     function addLine(startLat, startLng, endLat, endLng) {
-                        console.log("addLine", startLat, startLng, endLat, endLng);
                         var start = L.latLng(startLat, startLng);
                         var end = L.latLng(endLat, endLng);
                         var line = L.polyline([start, end], {color: 'red'}).addTo(map);
                         lines[startLat + ',' + startLng + '-' + endLat + ',' + endLng] = line;
                     }
+                var greenIcon = new L.Icon({
+                  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+                  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                  iconSize: [25, 41],
+                  iconAnchor: [12, 41],
+                  popupAnchor: [1, -34],
+                  shadowSize: [41, 41]
+                });
                 var mapObj = initMap();</script>
             </body>
             </html>
@@ -254,32 +240,33 @@ class MainWindow(QMainWindow):
             print("already have this ip")
             return
         print("dest ip: " + dest_ip_address)
-        self.ip_coordinates[dest_ip_address] = self.geolocate_ip(dest_ip_address.split(":")[0])
+        self.ip_coordinates[dest_ip_address] = self.geolocate_ip(dest_ip_address)
         dest_latitude, dest_longitude = self.ip_coordinates[dest_ip_address]
 
-        script = f"mapObj.addMarker('{dest_ip_address}', {dest_latitude}, {dest_longitude});"
-        self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
+        script = f"mapObj.addMarker('{dest_ip_address}', {dest_latitude}, {dest_longitude}, {{ icon: greenIcon }});"
+        self.webView.page().runJavaScript(script)
 
         latitude, longitude = self.ip_coordinates[self.my_ip]
 
         script = f"mapObj.addLine({latitude}, {longitude}, {dest_latitude}, {dest_longitude});"
-        self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
+        self.webView.page().runJavaScript(script)
 
     def remove_ip(self, ip_address):
-        if ip_address in self.ip_coordinates:
-            del self.ip_coordinates[ip_address]
+        if ip_address not in self.ip_coordinates:
+            print("ip not present.")
+            return
+        del self.ip_coordinates[ip_address]
 
-            script = f"mapObj.removeMarker('{ip_address}');"
-            self.webView.page().runJavaScript(script)
+        script = f"mapObj.removeMarker('{ip_address}');"
+        self.webView.page().runJavaScript(script)
 
     @pyqtSlot(object)
     def store_events(self, event):
         if type(event) is ControlPacketEvent and event.direction == "ingress":
             print("Received event", event)
-            if event.is_fin_packet:
+            event.ip = event.ip.split(":")[0]
+            if not event.is_fin_packet:
                 self.add_ip(event.ip)
-            else:
-                self.remove_ip(event.ip)
 
 
 # Application entry point
