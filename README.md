@@ -3,6 +3,7 @@ A simple eBPF-based program to keep track of the IPs to which your machine is co
 ## Demo:
 The window below is the freshly started ui running. In the terminal at the top I'm using curl to connect to a bunch of websites and they get displayed on the map.
 The ip is showed in the tooltip:
+![snitchrs-demo-2023-06-17](https://github.com/FedericoPonzi/snitchrs/assets/2124904/39a38a9d-ed6b-4c91-a443-e58a40251cc2)
 
 
 ## eBPF:
