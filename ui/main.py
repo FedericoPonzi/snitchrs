@@ -1,15 +1,10 @@
-import io
 import sys
 
 import requests
-from PyQt6.QtWebEngineCore import QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QHBoxLayout, QScrollArea
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QThread, QSize, QUrl, QObject
-import pyqtgraph as pg
-import folium
-from pyqtgraph.Qt import QtCore
-from datetime import datetime
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QScrollArea
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QThread, QSize, QUrl
+
 from dataclasses import dataclass
 
 
@@ -148,10 +143,14 @@ class MainWindow(QMainWindow):
         self.webView.page().loadFinished.connect(lambda: self.webView.page().runJavaScript(script))
 
     def geolocate_ip(self, ip_address):
-        import geocoder
-        location = geocoder.ip(ip_address)
-        latitude, longitude = location.latlng
-        return latitude, longitude
+        """
+        :param ip_address: ipv4 address
+        :return: latitude, longitude
+        """
+        response = requests.get("http://ip-api.com/json/" + ip_address)
+        if response.status_code == 200:
+            response = response.json()
+        return response['lat'], response['lon']
 
     def load_map(self, latitude, longitude):
         return """

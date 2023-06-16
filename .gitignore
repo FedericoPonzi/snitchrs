@@ -13,3 +13,5 @@ Cargo.lock
 **/*.rs.bk
 
 .idea
+ui/.venv
+
