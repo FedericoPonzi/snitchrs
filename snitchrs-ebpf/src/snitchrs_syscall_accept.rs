@@ -67,7 +67,7 @@ fn try_kprobe_syscall_accept_ret(ctx: &ProbeContext) -> Result<u32, i64> {
     let sock_addr: *const sockaddr = (*as_addr) as *const sockaddr;
 
     let family =
-        unsafe { ((bpf_probe_read_user(&*sock_addr)).map_err(|_e| 5i64)? as sockaddr).sa_family };
+        unsafe { (bpf_probe_read_user(&*sock_addr).map_err(|_e| 5i64)? as sockaddr).sa_family };
     // First we need to get the family, then we can use it to cast the sockaddr to a more specific type
     // Also, it helps filter out UDS and IPv6 connections.
     if family != AF_INET as sa_family_t {

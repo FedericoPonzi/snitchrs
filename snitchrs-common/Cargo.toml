@@ -9,7 +9,7 @@ user = ["aya"]
 kernel = ["aya-bpf"]
 
 [dependencies]
-aya = { git = "https://github.com/aya-rs/aya", branch = "main", optional = true }
-aya-bpf = { git = "https://github.com/aya-rs/aya", branch = "main", optional = true }
+aya = { git = "https://github.com/aya-rs/aya", optional = true, rev = "4c08b9b43" }
+aya-bpf = { git = "https://github.com/aya-rs/aya", optional = true, rev = "4c08b9b43" }
 [lib]
 path = "src/lib.rs"

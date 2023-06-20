@@ -44,8 +44,7 @@ def get_my_ip():
     response = requests.get('http://ipv4.icanhazip.com/')
     if response.status_code == 200:
         return response.text.strip()
-    raise RuntimeError("Could not get my ip address: "+ str(response))
-
+    raise RuntimeError("Could not get my ip address: " + str(response))
 
 
 # Custom worker thread

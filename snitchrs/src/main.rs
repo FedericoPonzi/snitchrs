@@ -17,31 +17,8 @@ use std::pin::Pin;
 use tokio::signal;
 
 mod utils {
-    use aya::util::kernel_symbols;
+    use aya::util::syscall_prefix;
     use std::io;
-
-    /// Find current system's syscall prefix by testing on the BPF syscall.
-    /// If no valid value found, will return the first possible value which
-    /// would probably lead to error in later API calls.
-    pub fn syscall_prefix() -> Result<&'static str, io::Error> {
-        const PREFIXES: [&str; 7] = [
-            "sys_",
-            "__x64_sys_",
-            "__x32_compat_sys_",
-            "__ia32_compat_sys_",
-            "__arm64_sys_",
-            "__s390x_sys_",
-            "__s390_sys_",
-        ];
-        let ksym = kernel_symbols()?;
-        let values = ksym.into_values().collect::<Vec<_>>();
-        for p in PREFIXES {
-            if values.contains(&format!("{}bpf", p)) {
-                return Ok(p);
-            }
-        }
-        return Ok(PREFIXES[0]);
-    }
 
     /// Given a name, it finds and append the system's syscall prefix to it.
     /// This function doesn't check if the name is for an existing syscall.
